@@ -1,6 +1,6 @@
 ---
 description: Instructions building apps with MCP
-globs: *
+globs: "*"
 alwaysApply: true
 ---
 
