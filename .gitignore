@@ -59,6 +59,8 @@ frontend/dist/
 .yarn-integrity
 *.tsbuildinfo
 frontend/.tsbuildinfo
+scratch_test_*.mjs
+frontend/scratch_test_*.mjs
 
 # ---- IDE / OS ----
 .vscode/settings.json
@@ -78,6 +80,8 @@ logs/
 .coverage
 htmlcov/
 .pytest_cache/
+test_results.txt
+backend/test_results.txt
 
 # ---- Misc ----
 *.bak

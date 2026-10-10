@@ -1,200 +1,195 @@
 # LOCOMART — Local Grocery Assistance Platform
 
-> **Current Milestone: M0 — Foundation**  
-> Authentication, shops, products, cart, orders, payments, delivery, and invoices are **not yet implemented**. They are planned for M1–M10.
+> **Status:** Full-Stack Implementation Complete (Milestones M1–M10)  
+> Connects local neighborhood grocery stores with customers for local ordering, delivery verification, and digital invoicing.
 
 ---
 
-## Project Purpose
+## 1. Project Purpose & Architecture
 
-LOCOMART is a portfolio-sized local grocery ordering platform that connects customers with four predefined local shops. Customers can browse products, manage a cart, place orders (COD or Stripe Test Mode), and track delivery. Shopkeepers manage their shop, products, and incoming orders. Admins approve shopkeeper applications before shops become active.
+LOCOMART is a full-featured local grocery ordering platform. Customers browse neighborhood shops, manage a cart, place orders via Cash on Delivery (COD) or Stripe Test Mode, and verify order delivery via a 6-digit OTP or contactless Leave-at-Door proof. Shopkeepers manage product catalogs, inventory, and order fulfillment. Administrators review and approve merchant applications.
+
+### Architecture Overview
+
+```
+React 19 + Vite Frontend (TypeScript)
+    │
+    │  Client Authentication (InsForge Auth SDK)
+    ▼
+InsForge Auth Service (JWT Sessions & Google OAuth)
+
+React 19 + Vite Frontend (TypeScript)
+    │
+    │  Application REST API (/api/v1/...)
+    ▼
+FastAPI Backend (Python 3.11+)
+    │
+    ├── InsForge PostgreSQL Database (Admin API / Advance Raw SQL)
+    │   └── Row Level Security (RLS) enabled across all 11 application tables
+    │
+    ├── InsForge Private Storage
+    │   ├── 'shop-documents' (Merchant KYC documents & storefront photos)
+    │   └── 'invoices' (Generated PDF invoices with authenticated proxy streaming)
+    │
+    └── Stripe Gateway (Test Mode Checkout Sessions & Webhooks)
+```
+
+- **React + Vite Frontend:** Responsive single-page application built with React 19, TypeScript, and modern modular CSS. Uses `@insforge/sdk` strictly for user authentication. All business data flows through FastAPI.
+- **FastAPI Backend:** The authoritative security and business boundary. Enforces role-based access control (`CUSTOMER`, `SHOPKEEPER`, `ADMIN`), transaction isolation, inventory locking, and order fulfillment verification.
+- **InsForge Infrastructure:** Hosted PostgreSQL database, authentication with email/password and Google OAuth, and private file storage buckets.
+- **Stripe Integration:** Secure Stripe-hosted Checkout sessions for online card payments in test mode with cryptographic webhook signature verification and replay prevention.
 
 ---
 
-## Architecture
+## 2. Implemented Features & Milestones
 
-```
-React + Vite (TypeScript)
-        │
-        │  HTTP REST API (/api/v1/...)
-        ▼
-FastAPI (Python)
-        │
-        ├── PostgreSQL on InsForge
-        └── InsForge services (Auth, Storage, as required per milestone)
-```
-
-**FastAPI** owns all business logic.  
-**InsForge** provides the managed infrastructure (PostgreSQL, Auth, Storage, Deployment).
+1. **Authentication & Role-Based Access Control (M1):**
+   - Three distinct portal entries: Customer, Shopkeeper, and Admin.
+   - Public registrations strictly default to `CUSTOMER`.
+   - Role verification on login prevents cross-portal access.
+   - Secure token verification cache with short TTL.
+2. **Merchant Onboarding & Admin Verification (M2):**
+   - Customers can submit a merchant application with store details and KYC documents.
+   - KYC documents stored in private InsForge storage buckets.
+   - Admin review dashboard with approval (auto-creates active shop & promotes role to `SHOPKEEPER`) or rejection with reason.
+3. **Shop & Product Management (M3):**
+   - Public shop directory and product catalog browsing with real-time category filtering and text search.
+   - Shopkeeper inventory management: add, edit, adjust stock, toggle availability, and archive products.
+4. **Customer Shopping Cart (M4):**
+   - Single-shop cart enforcement preventing cross-store item mixing.
+   - Real-time stock validation and quantity adjustments.
+5. **Transactional Order Placement & Inventory Reservation (M5):**
+   - Server-side atomic order creation using PostgreSQL stored procedure (`create_order_from_cart`) with row-level locks (`SELECT ... FOR UPDATE`).
+   - Order price snapshotting preventing client-side price tampering.
+6. **Payment Processing (M6):**
+   - Cash on Delivery (COD) and Online Payment via Stripe Test Mode.
+   - Server-side Stripe Checkout session creation.
+   - Webhook processing with cryptographic signature verification (`STRIPE_WEBHOOK_SECRET`) and idempotency tracking table (`stripe_webhook_events`).
+7. **Order Fulfillment Lifecycle (M7):**
+   - Multi-step status progression: `PENDING` -> `ACCEPTED` -> `PREPARING` -> `OUT_FOR_DELIVERY` -> `DELIVERED` (or `CANCELLED`).
+   - Customer-initiated online checkout cancellation with atomic inventory restoration.
+8. **Delivery Handover Verification (M8):**
+   - **Hand-to-Customer:** 6-digit delivery OTP generated at dispatch, verified by shopkeeper at handover. Rate-limited regeneration with cooldown. OTP is never exposed to merchants.
+   - **Leave-at-Door:** Contactless verification workflow for door drop-offs.
+9. **Automated PDF Invoice Generation (M9):**
+   - ReportLab PDF generator creating branded invoices with order snapshots and Unicode Indian Rupee (₹) support.
+   - Uploaded to private `invoices` InsForge storage bucket.
+   - Secure authenticated streaming endpoint with customer/shopkeeper ownership authorization.
+10. **Security Hardening (SEC-01 – SEC-10 & Database Protection):**
+    - PostgreSQL Row Level Security (RLS) enabled on all 11 tables.
+    - PostgREST table and RPC function grants revoked from `anon` and `authenticated` roles.
+    - Webhook handler fails closed when secrets are unconfigured.
+    - Production `SECRET_KEY` validator enforcing strong random keys.
+    - Safe CORS origin verification for Stripe redirects.
 
 ---
 
-## Project Structure
+## 3. Database Schema
 
-```
-LOCOMART/
-├── frontend/           React + Vite + TypeScript
-│   ├── src/
-│   │   ├── api/        API client layer
-│   │   ├── App.tsx     Foundation page (M0)
-│   │   └── App.css     Design system
-│   └── .env            (gitignored — not committed)
-├── backend/            Python + FastAPI
-│   ├── main.py         FastAPI application
-│   ├── config.py       Settings (loaded from .env)
-│   ├── database.py     SQLAlchemy async engine
-│   ├── requirements.txt
-│   └── test_health.py  M0 health tests
-├── docs/               Architecture documentation
-├── .env.example        Environment variable template (commit this)
-├── .gitignore
-└── README.md
-```
+All 11 application tables reside in the `public` schema in InsForge PostgreSQL. Under SEC-03, direct PostgREST table access and custom RPC function execution (`create_order_from_cart`, `regenerate_delivery_otp`) have been revoked from `anon` and `authenticated` roles, with PostgreSQL Row-Level Security (RLS) enabled across all tables as defense in depth. All application data flows strictly through the FastAPI backend:
+
+| Table Name | Description | Key Columns |
+| :--- | :--- | :--- |
+| `public.users` | User accounts & delivery profiles | `id`, `email`, `role`, `name`, `phone`, `address`, `city`, `state`, `pincode` |
+| `public.shops` | Approved local merchant stores | `id`, `owner_id`, `name`, `description`, `business_phone`, `address`, `city`, `is_active`, `is_open` |
+| `public.products` | Store item catalog & live stock | `id`, `shop_id`, `name`, `category`, `unit_label`, `price`, `stock`, `is_available`, `is_archived` |
+| `public.shopkeeper_applications` | KYC merchant registration requests | `id`, `user_id`, `applicant_name`, `shop_name`, `document_url`, `status`, `rejection_reason` |
+| `public.carts` | Active customer cart session | `id`, `customer_id`, `shop_id`, `status` |
+| `public.cart_items` | Cart line items & quantities | `id`, `cart_id`, `product_id`, `quantity` |
+| `public.orders` | Placed customer orders | `id`, `customer_id`, `shop_id`, `status`, `subtotal`, `total`, `payment_method`, `payment_status`, `delivery_method` |
+| `public.order_items` | Itemized order snapshots | `id`, `order_id`, `product_id`, `product_name_snapshot`, `unit_price`, `quantity`, `subtotal` |
+| `public.delivery_verifications` | OTP delivery security records | `id`, `order_id`, `otp_hash`, `encrypted_code`, `attempt_count`, `status`, `expires_at` |
+| `public.stripe_webhook_events` | Webhook idempotency tracking | `event_id`, `event_type`, `order_id`, `created_at` |
+| `public.invoices` | Generated invoice PDF records | `id`, `order_id`, `invoice_number`, `storage_key` |
 
 ---
 
-## Local Setup
+## 4. Environment Configuration
+
+Copy `.env.example` to create the appropriate environment files:
+- Backend: `backend/.env`
+- Frontend: `frontend/.env`
+
+### Backend Variables (`backend/.env`)
+
+```ini
+APP_ENV=development                       # Set to 'production' in production
+APP_DEBUG=true                            # Forced to False when APP_ENV=production
+SECRET_KEY=your-secure-random-secret-key  # Must be 32+ chars in production
+
+# InsForge BaaS Connection
+INSFORGE_URL=https://<your-project>.insforge.app
+INSFORGE_API_KEY=<your-insforge-admin-api-key>
+INSFORGE_ANON_KEY=<your-insforge-anon-key>
+
+# CORS — Allowed Frontend Origins (comma-separated)
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
+# Stripe Test Mode
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+```
+
+### Frontend Variables (`frontend/.env`)
+
+```ini
+VITE_API_URL=http://localhost:8000
+VITE_INSFORGE_URL=https://<your-project>.insforge.app
+VITE_INSFORGE_ANON_KEY=<your-insforge-anon-key>
+```
+
+> **Build Note:** In production, `VITE_API_URL` must point to the production backend API URL before running `npm run build`, as Vite compiles environment variables into static client bundles at build time.
+
+---
+
+## 5. Local Setup & Running
 
 ### Prerequisites
+- Python 3.11+
+- Node.js 18+ & npm
 
-| Tool    | Version  |
-|---------|----------|
-| Python  | 3.11+    |
-| Node.js | 18+      |
-| npm     | 9+       |
-
----
-
-### 1. Clone and configure environment
-
-```bash
-# Copy the environment template
-cp .env.example backend/.env
-```
-
-Edit `backend/.env` and fill in your real values:
-
-```env
-DATABASE_URL=postgresql+asyncpg://project_admin:<password>@5xekk2s5.ap-southeast.insforge.app:5432/insforge
-DATABASE_SYNC_URL=postgresql://project_admin:<password>@5xekk2s5.ap-southeast.insforge.app:5432/insforge
-INSFORGE_URL=https://5xekk2s5.ap-southeast.insforge.app
-INSFORGE_ANON_KEY=<your-anon-key>
-SECRET_KEY=<long-random-string>
-CORS_ORIGINS=http://localhost:5173
-```
-
-> ⚠️ **Never commit `.env`** — it is in `.gitignore`.
-
----
-
-### 2. Start the FastAPI Backend
-
-```bash
+### Terminal 1: FastAPI Backend
+```powershell
 cd backend
-
-# Create virtual environment
-py -3 -m venv .venv
-.venv\Scripts\activate        # Windows
-# or: source .venv/bin/activate   # macOS/Linux
-
-# Install dependencies
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-# Run the development server
 uvicorn main:app --reload --port 8000
 ```
+- API runs on `http://localhost:8000`.
+- Interactive Swagger docs available at `http://localhost:8000/docs` (disabled when `APP_ENV=production`).
 
-FastAPI will be available at: **http://localhost:8000**  
-Interactive API docs: **http://localhost:8000/docs**
-
----
-
-### 3. Start the React/Vite Frontend
-
-```bash
+### Terminal 2: React Frontend
+```powershell
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start the dev server
 npm run dev
 ```
-
-Vite will be available at: **http://localhost:5173**
-
----
-
-## Verify M0 is Working
-
-### Backend health check
-
-```bash
-curl http://localhost:8000/health
-# Expected: {"status":"ok"}
-
-curl http://localhost:8000/health/db
-# Expected: {"status":"ok","database":"connected","version":"PostgreSQL 15..."}
-```
-
-### Frontend
-
-Open **http://localhost:5173** — the foundation page will:
-1. Auto-call `/health` and `/health/db`
-2. Display **Connected** badges for both API and Database
-3. Show an "All systems operational" banner when M0 is fully verified
+- Frontend runs on `http://localhost:5173`.
 
 ---
 
-## Required Environment Variables
+## 6. Administrative Utilities
 
-| Variable             | Description                                  | Used By  |
-|----------------------|----------------------------------------------|----------|
-| `DATABASE_URL`       | SQLAlchemy async Postgres URL                | Backend  |
-| `DATABASE_SYNC_URL`  | Synchronous Postgres URL (for Alembic)       | Backend  |
-| `INSFORGE_URL`       | InsForge project base URL                    | Backend  |
-| `INSFORGE_ANON_KEY`  | InsForge anonymous JWT                       | Backend  |
-| `SECRET_KEY`         | Long random key for JWT signing (future M1)  | Backend  |
-| `CORS_ORIGINS`       | Comma-separated allowed CORS origins         | Backend  |
-| `VITE_API_URL`       | FastAPI base URL for the frontend            | Frontend |
-
----
-
-## Running Tests
-
-```bash
+### Seed Initial Demo Stores
+To populate the database with the initial four approved demo stores and merchant accounts:
+```powershell
 cd backend
-# Ensure .venv is activated
-pytest test_health.py -v
+python seed_demo_shops.py
+```
+
+### Promote User Role (Admin Tool)
+To assign `ADMIN` or `SHOPKEEPER` roles without public sign-up backdoors:
+```powershell
+cd backend
+python set_role.py admin@locomart.com ADMIN
+python set_role.py shopkeeper@locomart.com SHOPKEEPER
 ```
 
 ---
 
-## InsForge Connection
+## 7. Authentication & OAuth Setup
 
-| Property     | Value                                           |
-|--------------|-------------------------------------------------|
-| Backend URL  | https://5xekk2s5.ap-southeast.insforge.app      |
-| Region       | ap-southeast                                    |
-| Database     | PostgreSQL 15 (insforge)                        |
-| Auth         | Email/password + Google OAuth                   |
-
----
-
-## Development Milestones
-
-| Milestone | Description             | Status      |
-|-----------|-------------------------|-------------|
-| **M0**    | Foundation              | ✅ Complete |
-| M1        | Auth & Customer Profile | ⬜ Planned  |
-| M2        | Shopkeeper App & Admin  | ⬜ Planned  |
-| M3        | Shops & Products        | ⬜ Planned  |
-| M4        | Cart & Shopping         | ⬜ Planned  |
-| M5        | Orders & Inventory      | ⬜ Planned  |
-| M6        | Stripe Test Payments    | ⬜ Planned  |
-| M7        | Shopkeeper Fulfillment  | ⬜ Planned  |
-| M8        | Delivery & OTP          | ⬜ Planned  |
-| M9        | Invoices                | ⬜ Planned  |
-| M10       | Final Polish & Deploy   | ⬜ Planned  |
-
-See [FINAL_PROJECT_SPECIFICATION (1).md](./FINAL_PROJECT_SPECIFICATION%20(1).md) for the complete specification.
+- Google OAuth is integrated into the frontend via `@insforge/sdk` using `signInWithOAuth('google')`.
+- In development, the redirect URI is `http://localhost:5173/auth/callback`.
+- When deploying to production, add your production domain redirect URL (`https://<your-domain>/auth/callback`) in the InsForge dashboard under **Auth Methods -> Google -> Redirect URLs**.
