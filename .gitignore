@@ -7,8 +7,10 @@
 .env
 .env.local
 .env.*.local
+.env.*
 *.env
 backend/.env
+backend/.env.compute
 frontend/.env
 frontend/.env.local
 
@@ -86,3 +88,18 @@ backend/test_results.txt
 # ---- Misc ----
 *.bak
 *.tmp
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf
