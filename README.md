@@ -352,6 +352,27 @@ LOCOMART/
 └── .env.example                # Template for backend and frontend variables
 ```
 
+<h2 align="center">📸 Project Photos</h2>
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="IMAGE_URL_1" width="100%" />
+    </td>
+    <td align="center">
+      <img src="IMAGE_URL_2" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="IMAGE_URL_3" width="100%" />
+    </td>
+    <td align="center">
+      <img src="IMAGE_URL_4" width="100%" />
+    </td>
+  </tr>
+</table>
+
 ## Getting Started
 
 ### Prerequisites
